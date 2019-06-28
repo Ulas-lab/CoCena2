@@ -20,6 +20,8 @@ flattenCorrMatrix <- function(cormat, pmat) {
     p = pmat[ut]
   )
 }
+
+
 ###cor funktioniert vllt erst auf pvalues cutten oder 0.5 correlation
 
 #############Heatmap
@@ -73,7 +75,7 @@ r_squared_values = function(graph) {# calculate degree
   #print(paste("R square =", round(R.square, 3)))
   r_square_val<-R.square}
 
-fit_power_law = function(graph) {
+fit_power_law = function(graph,pdf=T) {
   # calculate degree
   d = igraph::degree(graph, mode = "all")
   dd = degree.distribution(graph, mode = "all", cumulative = FALSE)
@@ -91,9 +93,17 @@ fit_power_law = function(graph) {
   print(paste("Alpha =", round(alpha, 3)))
   print(paste("R square =", round(R.square, 3)))
   # plot
+  if(pdf){
+    pdf("Degree_distribution_plot.pdf")
   plot(probability ~ degree, log = "xy", xlab = "Degree (log)", ylab = "Probability (log)",
        col = 1, main = "Degree Distribution")
   curve(power.law.fit, col = "red", add = T, n = length(d))
+  dev.off()
+  }else{
+    plot(probability ~ degree, log = "xy", xlab = "Degree (log)", ylab = "Probability (log)",
+         col = 1, main = "Degree Distribution")
+    curve(power.law.fit, col = "red", add = T, n = length(d))
+  }
 }
 
 ###change vertex.frame.width by creating new shape
@@ -343,9 +353,29 @@ cutoff_visualisation<-function(correlation_df=correlation_df,min_corr=0.5,range_
   return(list_cutoff_options) 
 }
 
+#optimal cutoff
+optimal_cutoff<-function(cutoff_table=cutoff_options){
+  
+  
+  n <- length(unique(cutoff_table$Cutoff_df$no_network))
+  num_of_subnetworks <- sort(unique(cutoff_table$Cutoff_df$no_network))[2]
+  
+  optimal_cutoff <- cutoff_table$Cutoff_df %>% 
+    filter(no_network == num_of_subnetworks)
+
+  optimal_cutoff <- optimal_cutoff %>%
+    filter(number_edges < 30000)
+    
+    optimal_cutoff <- optimal_cutoff %>%
+    filter(number_nodes > 0.3*max(optimal_cutoff$number_nodes)) %>%
+    arrange(desc(r_squared_all)) %>%
+    filter(row_number()==1)
+  
+  return(optimal_cutoff$cut_off) 
+}
 
 ##plotnetwork
-plot_network<-function(data=correlation_df,layout=layout_with_kk, min_nodes_number_for_network=10,show_HC= TRUE){
+plot_network<-function(data=correlation_df,layout=layout_with_kk, min_nodes_number_for_network=10,show_HC= TRUE, pdf = T){
   summary<-allargs()
   #how include layout in summary?
   #summary[[c("plot_network")]]<-data.frame(min_nodes_number_for_network,show_HC)
@@ -353,51 +383,110 @@ plot_network<-function(data=correlation_df,layout=layout_with_kk, min_nodes_numb
   igraph_object<-igraph::graph_from_data_frame(cutted_data,directed=FALSE)
   
   if(show_HC==TRUE){
-    nodes_list<-V(igraph_object)
-    tmp<-original_data[nodes_list,]
-    tmp <- tmp[apply(tmp, MARGIN = 1, FUN = function(x) sd(x) != 0),]
-    tmp <- tmp[complete.cases(tmp),]
-    
-    pheatmap::pheatmap(tmp, 
-                       cluster_row = T,
-                       cluster_cols = T,
-                       color = col.pal,
-                       scale = c("row"),
-                       annotation_col = info_Dataset)
-  }
-  
-  if(count_components(igraph_object)==1){
-    igraph_list<-list()
-    igraph_list[[1]]<-igraph_object
-    layout_df<-BiocGenerics::do.call(layout, igraph_list)
-  
-    g<-igraph_object
-    plot(igraph_object,layout=layout_df,
-         vertex.size = 3 ,
-        vertex.frame.width = 3/100 ,
-         vertex.label = NA , 
-         vertex.frame.color = "lightgrey")
-    
-  }else{
-    
-    components<-1:igraph::components(igraph_object)[[3]]
-    components_numbers<-components[igraph::components(igraph_object)[[2]]>min_nodes_number_for_network]
-    V(igraph_object)$comp<-igraph::components(igraph_object)[[1]]
-    list_of_components_graphs<-list()
-    for(component in components_numbers){
-      list_of_components_graphs[[as.character(component)]] <- induced_subgraph(igraph_object , V(igraph_object)$comp == component)
+    if(pdf){
+      
+      nodes_list<-V(igraph_object)
+      tmp<-original_data[nodes_list,]
+      tmp <- tmp[apply(tmp, MARGIN = 1, FUN = function(x) sd(x) != 0),]
+      tmp <- tmp[complete.cases(tmp),]
+      
+      pdf("HC_network_genes.pdf")
+      
+      pheatmap::pheatmap(tmp, 
+                         cluster_row = T,
+                         cluster_cols = T,
+                         color = col.pal,
+                         scale = c("row"),
+                         annotation_col = info_Dataset)
+      dev.off()
+    }else{
+      nodes_list<-V(igraph_object)
+      tmp<-original_data[nodes_list,]
+      tmp <- tmp[apply(tmp, MARGIN = 1, FUN = function(x) sd(x) != 0),]
+      tmp <- tmp[complete.cases(tmp),]
+      
+      pdf("HC_network_genes.pdf")
+      
+      pheatmap::pheatmap(tmp, 
+                         cluster_row = T,
+                         cluster_cols = T,
+                         color = col.pal,
+                         scale = c("row"),
+                         annotation_col = info_Dataset)
+      dev.off()
+      
     }
-    layouts_on_list <- lapply(list_of_components_graphs , layout)
-    layout_df <- merge_coords(list_of_components_graphs , layouts_on_list)
-    g <- disjoint_union(list_of_components_graphs)
-    
-    plot(g,layout=layout_df,
-         vertex.size = 3 ,
-         vertex.frame.width = 3/100 ,
-         vertex.label = NA , 
-         vertex.frame.color = "lightgrey")
   }
-  
+  if(pdf){
+    if(count_components(igraph_object)==1){
+      pdf("Selected_network_layout.pdf")
+      igraph_list<-list()
+      igraph_list[[1]]<-igraph_object
+      layout_df<-BiocGenerics::do.call(layout, igraph_list)
+    
+      g<-igraph_object
+      plot(igraph_object,layout=layout_df,
+           vertex.size = 3 ,
+          vertex.frame.width = 3/100 ,
+           vertex.label = NA , 
+           vertex.frame.color = "lightgrey")
+      dev.off()
+      
+    }else{
+      components<-1:igraph::components(igraph_object)[[3]]
+      components_numbers<-components[igraph::components(igraph_object)[[2]]>min_nodes_number_for_network]
+      V(igraph_object)$comp<-igraph::components(igraph_object)[[1]]
+      list_of_components_graphs<-list()
+      for(component in components_numbers){
+        list_of_components_graphs[[as.character(component)]] <- induced_subgraph(igraph_object , V(igraph_object)$comp == component)
+      }
+      layouts_on_list <- lapply(list_of_components_graphs , layout)
+      layout_df <- merge_coords(list_of_components_graphs , layouts_on_list)
+      g <- disjoint_union(list_of_components_graphs)
+      
+      pdf("Selected_network_layout.pdf")
+      plot(g,layout=layout_df,
+           vertex.size = 3 ,
+           vertex.frame.width = 3/100 ,
+           vertex.label = NA , 
+           vertex.frame.color = "lightgrey") 
+      dev.off()
+      
+    }
+  }else{
+    if(count_components(igraph_object)==1){
+      pdf("Selected_network_layout.pdf")
+      igraph_list<-list()
+      igraph_list[[1]]<-igraph_object
+      layout_df<-BiocGenerics::do.call(layout, igraph_list)
+      
+      g<-igraph_object
+      plot(igraph_object,layout=layout_df,
+           vertex.size = 3 ,
+           vertex.frame.width = 3/100 ,
+           vertex.label = NA , 
+           vertex.frame.color = "lightgrey")
+
+    }else{
+      components<-1:igraph::components(igraph_object)[[3]]
+      components_numbers<-components[igraph::components(igraph_object)[[2]]>min_nodes_number_for_network]
+      V(igraph_object)$comp<-igraph::components(igraph_object)[[1]]
+      list_of_components_graphs<-list()
+      for(component in components_numbers){
+        list_of_components_graphs[[as.character(component)]] <- induced_subgraph(igraph_object , V(igraph_object)$comp == component)
+      }
+      layouts_on_list <- lapply(list_of_components_graphs , layout)
+      layout_df <- merge_coords(list_of_components_graphs , layouts_on_list)
+      g <- disjoint_union(list_of_components_graphs)
+      
+      plot(g,layout=layout_df,
+           vertex.size = 3 ,
+           vertex.frame.width = 3/100 ,
+           vertex.label = NA , 
+           vertex.frame.color = "lightgrey") 
+
+    }
+  }
   
   return_list<-list()
   return_list[[c("graph_object")]]<-g
@@ -415,11 +504,9 @@ heatmap_clustered<-function(igraph_object=igraph_object,
                             max_cluster_count_per_gene=8,
                             min_cluster_size=10,
                             desicion_to_see_plot=TRUE,
-                            desicion_to_save_plot=FALSE,
-                            name_for_pdf_plot=c("Network_greater_clusters_clustered"),
                             print_to_pdf=FALSE,
                             name_for_pdf=c("Heatmap_greater_clusters_clustered"),
-                            average){
+                            average = "mean"){
   # summary[[c("heatmap_clustered")]]<-data.frame(iterations,no_of_iterations,max_cluster_count_per_gene,
   #                                      min_cluster_size,desicion_to_see_plot,desicion_to_save_plot,name_for_pdf_plot,
   #                                      print_to_pdf,name_for_pdf)
@@ -589,119 +676,171 @@ heatmap_clustered<-function(igraph_object=igraph_object,
   
   
   #col.pal <- rev(RColorBrewer::brewer.pal(11, "RdBu"))
-  new_col = colorRamp2(breaks = c(min(dat_new_dendo), 0, max(dat_new_dendo)), colors = c("#053061", "#F7F7F7", "#67001F"))
-  if(print_to_pdf==TRUE){
-    mainDir <- originalwd
-    subDir <- chosen_cutoff
-    dir.create(file.path(mainDir , subDir))
-    setwd(file.path(mainDir , subDir))
-    pdf(paste0(name_for_pdf,".pdf") , width = 8 , height = 8)
-    draw(Heatmap(dat_new_dendo,
-                 #kmeans_k = 7,
-                 cluster_rows = T,
-                 cluster_columns = T,
-                 color = new_col))
-    dev.off()
-    print(paste0("PDF sent to ",getwd()))
-  }
-  
-  
-  if(desicion_to_see_plot ==FALSE){
+  # new_col = colorRamp2(breaks = c(min(dat_new_dendo), 0, max(dat_new_dendo)), colors = c("#053061", "#F7F7F7", "#67001F"))
+  # if(print_to_pdf==TRUE){
+  #   mainDir <- originalwd
+  #   subDir <- chosen_cutoff
+  #   dir.create(file.path(mainDir , subDir))
+  #   setwd(file.path(mainDir , subDir))
+  #   pdf(paste0(name_for_pdf,".pdf") , width = 8 , height = 8)
+  #   draw(Heatmap(dat_new_dendo,
+  #                #kmeans_k = 7,
+  #                cluster_rows = T,
+  #                cluster_columns = T,
+  #                color = new_col))
+  #   dev.off()
+  #   print(paste0("PDF sent to ",getwd()))
+  # }
+  # 
+
+  if(print_to_pdf==TRUE && desicion_to_see_plot ==TRUE){
+    
     color_cluster_min_size <- as.data.frame(clp$membership)
     cluster_min_sized_names$V1 <- as.numeric(cluster_min_sized_names$V1)
     color_cluster_min_size$try <- apply(color_cluster_min_size , 1 , function(x) {
-      if(x[1] %in% cluster_min_sized_names$V1) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
         tmp <- df_molten[grep(paste0("^" , x[1] , "$") , df_molten$Cluster) , ]
         tmp[1 , 6]
       }else{
-        "white"
+        "waste"
       }
     })
     cluster_min_sized_names$V1 <- as.character(cluster_min_sized_names$V1)
     color_cluster_min_size$`clp$membership` <- as.character(color_cluster_min_size$`clp$membership`)
     color_cluster_min_size$vertex_size <- apply(color_cluster_min_size , 1 , function(x) {
-      if(x[1] %in% cluster_min_sized_names$V1) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
         3
       }else{
-        1.5
+        1
       }
     })
     hc_add_on <- color_cluster_min_size
-    Heatmap(dat_new_dendo, 
-            cluster_rows = T,
-            cluster_columns = T,
-            color = new_col)
-    print("Finished")
-  }else{
+    par(mfrow=c(1,2))
+    frame()
+    heatmap<-Heatmap(dat_new_dendo, 
+                     cluster_rows = T,
+                     cluster_columns = T,
+                     color = new_col)
+    gb = grid.grabExpr(draw(heatmap))#color auch hier ersetzt      pdf(name_for_netowrk_pdf , width = 8 , height = 8)
     
+    pdf(paste0(name_for_pdf,".pdf") , width = 8 , height = 8)
     
-    if(desicion_to_save_plot==TRUE){
-      name_for_netowrk_pdf<-name_for_pdf_plot
-    }
+    grid.arrange(gb,ncol=2)
     
-    
-    if(desicion_to_see_plot==TRUE){
-      color_cluster_min_size <- as.data.frame(clp$membership)
-      cluster_min_sized_names$V1 <- as.numeric(cluster_min_sized_names$V1)
-      color_cluster_min_size$try <- apply(color_cluster_min_size , 1 , function(x) {
-        if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
-          tmp <- df_molten[grep(paste0("^" , x[1] , "$") , df_molten$Cluster) , ]
-          tmp[1 , 6]
-        }else{
-          "waste"
-        }
-      })
-      cluster_min_sized_names$V1 <- as.character(cluster_min_sized_names$V1)
-      color_cluster_min_size$`clp$membership` <- as.character(color_cluster_min_size$`clp$membership`)
-      color_cluster_min_size$vertex_size <- apply(color_cluster_min_size , 1 , function(x) {
-        if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
-          3
-        }else{
-          1
-        }
-      })
-      hc_add_on <- color_cluster_min_size
-      par(mfrow=c(1,2))
-      frame()
-      heatmap<-Heatmap(dat_new_dendo, 
-                       cluster_rows = T,
-                       cluster_columns = T,
-                       color = new_col)
-      gb = grid.grabExpr(draw(heatmap))#color auch hier ersetzt
-      grid.arrange(gb,ncol=2)
-      Sys.sleep(5)
-      V(g)$size<-color_cluster_min_size$vertex_size
-      color_cluster_min_size$vertex_color <- color_cluster_min_size$try
-      color_cluster_min_size$vertex_color <- apply(color_cluster_min_size,1, function(x){
-        
-        if(x[4]=="waste"){
-          
-          "white"
-          
-        }else{
-          
-          x[4]
-          
-        }
-        
-      })
-      #color_cluster_min_size[color_cluster_min_size$try%in%c("waste"),]<-c("grey")
+    Sys.sleep(5)
+    V(g)$size<-color_cluster_min_size$vertex_size
+    color_cluster_min_size$vertex_color <- color_cluster_min_size$try
+    color_cluster_min_size$vertex_color <- apply(color_cluster_min_size,1, function(x){
       
-      plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+      if(x[4]=="waste"){"white"}else{x[4]}
       
-    }
+    })
+    #color_cluster_min_size[color_cluster_min_size$try%in%c("waste"),]<-c("grey")
+    plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
     
-    if(desicion_to_save_plot==TRUE){
-      mainDir <- originalwd
-      subDir <- chosen_cutoff
-      V(g)$size<-color_cluster_min_size$vertex_size
-      #color_cluster_min_size[color_cluster_min_size$try%in%c("waste"),]<-c("grey")
-      dir.create(file.path(mainDir , subDir))
-      setwd(file.path(mainDir , subDir))
-      pdf(name_for_netowrk_pdf , width = 8 , height = 8)
-      plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA )#, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
-      dev.off()
-    }
+    #ppp<-ggnet2(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+    dev.off()
+    
+    grid.arrange(gb,ncol=2)
+    plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+    
+    
+  }
+  
+  if(print_to_pdf==FALSE && desicion_to_see_plot ==TRUE){
+    
+    color_cluster_min_size <- as.data.frame(clp$membership)
+    cluster_min_sized_names$V1 <- as.numeric(cluster_min_sized_names$V1)
+    color_cluster_min_size$try <- apply(color_cluster_min_size , 1 , function(x) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
+        tmp <- df_molten[grep(paste0("^" , x[1] , "$") , df_molten$Cluster) , ]
+        tmp[1 , 6]
+      }else{
+        "waste"
+      }
+    })
+    cluster_min_sized_names$V1 <- as.character(cluster_min_sized_names$V1)
+    color_cluster_min_size$`clp$membership` <- as.character(color_cluster_min_size$`clp$membership`)
+    color_cluster_min_size$vertex_size <- apply(color_cluster_min_size , 1 , function(x) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
+        3
+      }else{
+        1
+      }
+    })
+    hc_add_on <- color_cluster_min_size
+    par(mfrow=c(1,2))
+    frame()
+    heatmap<-Heatmap(dat_new_dendo, 
+                     cluster_rows = T,
+                     cluster_columns = T,
+                     color = new_col)
+    gb = grid.grabExpr(draw(heatmap))#color auch hier ersetzt      pdf(name_for_netowrk_pdf , width = 8 , height = 8)
+    
+
+    grid.arrange(gb,ncol=2)
+    
+    Sys.sleep(5)
+    V(g)$size<-color_cluster_min_size$vertex_size
+    color_cluster_min_size$vertex_color <- color_cluster_min_size$try
+    color_cluster_min_size$vertex_color <- apply(color_cluster_min_size,1, function(x){
+      
+      if(x[4]=="waste"){"white"}else{x[4]}
+      
+    })
+    #color_cluster_min_size[color_cluster_min_size$try%in%c("waste"),]<-c("grey")
+    plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+    
+  }
+  
+  if(print_to_pdf==TRUE && desicion_to_see_plot ==FALSE){
+    
+    color_cluster_min_size <- as.data.frame(clp$membership)
+    cluster_min_sized_names$V1 <- as.numeric(cluster_min_sized_names$V1)
+    color_cluster_min_size$try <- apply(color_cluster_min_size , 1 , function(x) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
+        tmp <- df_molten[grep(paste0("^" , x[1] , "$") , df_molten$Cluster) , ]
+        tmp[1 , 6]
+      }else{
+        "waste"
+      }
+    })
+    cluster_min_sized_names$V1 <- as.character(cluster_min_sized_names$V1)
+    color_cluster_min_size$`clp$membership` <- as.character(color_cluster_min_size$`clp$membership`)
+    color_cluster_min_size$vertex_size <- apply(color_cluster_min_size , 1 , function(x) {
+      if(x[1] %in% cluster_min_sized_names$V1 & !(x[1]==c("0"))) {
+        3
+      }else{
+        1
+      }
+    })
+    hc_add_on <- color_cluster_min_size
+    par(mfrow=c(1,2))
+    frame()
+    heatmap<-Heatmap(dat_new_dendo, 
+                     cluster_rows = T,
+                     cluster_columns = T,
+                     color = new_col)
+    gb = grid.grabExpr(draw(heatmap))#color auch hier ersetzt      pdf(name_for_netowrk_pdf , width = 8 , height = 8)
+    
+    pdf(paste0(name_for_pdf,".pdf") , width = 8 , height = 8)
+    
+    grid.arrange(gb,ncol=2)
+    
+    Sys.sleep(5)
+    V(g)$size<-color_cluster_min_size$vertex_size
+    color_cluster_min_size$vertex_color <- color_cluster_min_size$try
+    color_cluster_min_size$vertex_color <- apply(color_cluster_min_size,1, function(x){
+      
+      if(x[4]=="waste"){"white"}else{x[4]}
+      
+    })
+    #color_cluster_min_size[color_cluster_min_size$try%in%c("waste"),]<-c("grey")
+    plot(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+    
+    #ppp<-ggnet2(g , vertex.color = color_cluster_min_size$vertex_color , layout = layout_for_network , vertex.frame.color = "lightgrey" , vertex.label = NA) #, vertex.size = as.numeric(color_cluster_min_size$vertex_size))
+    dev.off()
+    
   }
   
   color_cluster_min_size$Gene<-clp$names
@@ -836,6 +975,8 @@ GFC_calculation<-function(normdata=original_data,
   RT<-list()
   RT[["GFC_all_genes"]]<-GFC_all_genes
   RT[["summary"]]<-summary
+  
+ 
   return(RT)
 }
 
@@ -904,6 +1045,9 @@ toCytoscape_all<-function(cluster_information=cluster_information){
   network.name = c("myNetwork")
   collection.name = "myCollection"
   network.suid <- createNetwork(mynodes , myedges , network.name , collection.name)
+  
+  #ig <- graph_from_data_frame(myedges, directed=F, vertices=mynodes)
+  #network.suid <- createNetworkFromIgraph(ig,"myIgraph")
   
   ###delete all styles
   #listStyles(base.url)
@@ -980,7 +1124,7 @@ LayoutfromCytoscape<-function(){
 
 
 ##
-test_layout<-function(layouts_to_test=c("layout_with_fr","layout_with_kk","layout_with_lgl"),min_nodes_number_for_network=10){
+test_layout<-function(layouts_to_test=c("layout_with_fr","layout_with_kk","layout_with_lgl"),min_nodes_number_for_network=10, pdf = T){
   # summary[[c("test_layout")]]<-data.frame(layouts_to_test,min_nodes_number_for_network)
   summary<-allargs()
   data<-correlation_df
@@ -1010,6 +1154,8 @@ test_layout<-function(layouts_to_test=c("layout_with_fr","layout_with_kk","layou
     }
   }
   
+  if(pdf){
+  pdf("layouts.pdf")
   par(mfrow=c(2,2))
   for(listenplatz in names(layouts_on_list_coord)){
     plot(g,layout=layouts_on_list_coord[[listenplatz]],
@@ -1018,6 +1164,19 @@ test_layout<-function(layouts_to_test=c("layout_with_fr","layout_with_kk","layou
          vertex.label = NA , 
          vertex.frame.color = "lightgrey",
          main=listenplatz)
+  }
+  dev.off()
+  }
+  else{
+    par(mfrow=c(2,2))
+    for(listenplatz in names(layouts_on_list_coord)){
+      plot(g,layout=layouts_on_list_coord[[listenplatz]],
+           vertex.size = 3 ,
+           vertex.frame.width = 3/100 ,
+           vertex.label = NA , 
+           vertex.frame.color = "lightgrey",
+           main=listenplatz)
+    }
   }
   RT<-list()
   RT[["layouts_on_list_coord"]]<-layouts_on_list_coord
@@ -1184,7 +1343,7 @@ search_for_good_cutoff<-function(data=correlation_df,min_nodes_number_for_networ
 
 ##plot GFC
 ##plot GFC Networks
-plot_GFC_networks<-function(igraph_object=igraph_object,print_to_pdf=FALSE,print_edges_png_nodes_pdf=c("each","one","none")){
+plot_GFC_networks<-function(igraph_object=igraph_object,print_to_pdf=FALSE,print_edges_png_nodes_pdf=c("each","one","none"),GFC_all_genes=GFC_all_genes){
   # summary[["plot_GFC_networks"]]<-data.frame(print_to_pdf)
   
   GFC_all_genes_color<-GFC_all_genes
