@@ -1,0 +1,622 @@
+---
+title: "CoCena2: Construction of Co-expression network analysis - automated"
+author: "Shobhit Agrawal, Lisa Holsten, Marie Oestreich, Lea Seep, Thomas Ulas"
+date: "2019-12-12"
+
+output: 
+ html_document:
+  toc: TRUE
+  toc_float: true
+---
+
+# Preparations
+
+1. These scripts only work when the the directory structure for your work looks like:  
+       working_directory/  
+                  scripts/ (All CoCena? scripts)  
+                  data/ (count table)  
+                  reference_files/ (gmt file, TFcat file etc)  
+                  sample_info/ (metadata file)  
+
+2. The following parameters have to be set:
+
+  + **working_directory**:  
+     Provide path for the working directory containing the following folders: 
+     scripts, data, reference files, samples info, ensure you **end the path with a forward slash**
+   
+  + **count_file_name**:  
+     Input the name of the count file in csv format (*path: working_directory/data/count_file.csv*)  
+     The file structure should be the following:  
+      + blank,sample1,sample2,sample3,sampleN    
+      + gene1, count, count, ...  
+      + gene2, count, count, ...  
+      + geneN, count, count, ...
+    
+  + **topvar_genes**:  
+     The number of genes to be included for the co-expression analysis based on their variance, 
+     e.g. if topvar_genes=500, the genes will be sorted by their variance (high to low) and the first 500 genes
+     (genes which show most variance) will be selected for the downstream analysis.  
+     If you do not know what to input, leave the options as it is. topvar_genes depends on the data, 
+     e.g. it is different for single-cell and bulk data.
+
+  + **info_dataset_name**:  
+     Input the name of the metadata file in csv format (*path: working_directory/sample_info/info_Dataset*).
+     The file provides metadata of samples, samples will be grouped by variables defined in this file.  
+     The file structure should be the following:  
+       + file (rownames = sample names (which correspond to the first column of the count file))  
+       + first colname empty, Condition, Disease, Tissue......    
+       + GSM111456 Control Influenza PBMC ...
+        
+  + **voi** - Variable of interest:  
+     Name of the column in the info data set which contains the grouping information for calculating 
+     group fold changes (GFCs), e.g. if one is interested in disease then the voi needs to be set to the 
+     column name containing disease information in the info data set.
+     
+  + **TF_list_name**:  
+     Input the name of the transcription factor file (*path: working_directory/reference_files/TF_file*).
+     The file structure should be the following:
+      + file column names Taxon1 Taxon2 Type_of_gene
+      + Mouse Human Merged_Taxa
+      + Aatf AATF TF
+      + Aes AES Co_factor  
+
+  + **GMT files**:  
+     GMT: Gene Matrix Transposed file format (.gmt), see
+     [link](https://software.broadinstitute.org/cancer/software/gsea/wiki/index.php/Data_formats) for details.
+     Input the name of the representative GMT files (*path: working_directory/reference_files/gmtfile*). 
+     Only the gmtfile_name_hallmarks is essential for the ClusterProfiler GSEA. Others can be provided for
+     coloring of the network nodes.  
+
+  + **organism**:
+    Input name of the study organism human or mouse.
+
+  + **min_corr** and **range_cutoff_length**:  
+     To select genes to be used for the subsequent analysis, the optimal correlation coefficient cut-off needs
+     to be determined. 
+     The cutoff range to be tested is defined by min. correlation limit specified below, up to the max.
+     correlation found in data between genes, while the number of cut-offs tested is determined by
+     range_cutoff_length. E.g. if min_corr=0.5 and the range_cutoff_length=300, 300 cutoff-values between
+     0.5-max(correlation_between_genes) will be tested. For bulk RNA data, 0.5 gives decent results might need
+     to lower this for single cell experiments.  
+     
+  + **print_distribution_plots**:  
+     True will print the distribution plots for all tested cut-offs to pdf files.  
+     
+  + **min_nodes_number_for_network** and **min_nodes_number_for_cluster**:  
+     Input the minimal number of nodes to determine a separate network (=igraph component). For each network
+     a layout is calculated, which are then merged to obtain one network plot. the minimal number of nodes to
+     determine a cluster for the calculation of clusters by the cluster algorithm. 
+
+  + **data_in_log**:  
+     Is data on logarithmic scale?  
+     
+  + **range_GFC**:  
+    Input the range the group fold change (GFC) should have.  
+    
+  + **layout_algorithm**:
+     Input the layout algorithm to be used for the network layout 
+     (choose between layout_with_fr = fast or cytoscape = slow, but nicer separation of the clusters calculated.      *cytoscape needs to be installed and open!*)
+     
+     
+
+```{r}
+working_directory = paste0(setwd(dirname(rstudioapi::getSourceEditorContext()$path)),"/")
+
+topvar_genes = 10000
+
+voi = "merged"
+
+
+TF_list_name = "TFcat.txt"
+gmtfile_name_hallmarks = "h.all.v6.1.symbols.gmt"
+gmtfile_name_go = "c5.bp.v7.0.symbols.gmt"
+gmtfile_name_kegg = "c2.cp.kegg.v7.0.symbols.gmt"
+gmtfile_name_reactome = "c2.cp.reactome.v7.0.symbols.gmt"
+
+organism = "human"
+
+min_corr=0.7
+range_cutoff_length=1000
+print_distribution_plots = FALSE
+
+min_nodes_number_for_network=40 
+min_nodes_number_for_cluster=40
+
+data_in_log=F
+
+range_GFC=2.0
+
+layout_algorithm = "layout_with_fr"  
+
+
+```
+
+
+
+# Packages
+
+## Install packages:
+
+```{r eval=FALSE, include=FALSE}
+install.packages(c("bench",
+                   "BiocManager",
+                   "combinat",
+                   "ComplexHeatmap",
+                   "dplyr",
+                   "ggnetwork",
+                   "ggplot2",
+                   "graphics",
+                   "grDevices",
+                   "grid",
+                   "gtools",
+                   "Hmisc",
+                   "igraph",
+                   "intergraph",
+                   "knitr",
+                   "MCDA",
+                   "openxlsx",
+                   "pals",
+                   "pheatmap",
+                   "purrr",
+                   "stringi",
+                   "tidyr",
+                   "tidyverse",
+                   "utils",
+                   "ggalluvial"))
+
+
+BiocManager::install(c("biomaRt",
+                       "clusterProfiler",
+                       "DOSE",
+                       "org.Hs.eg.db",
+                       "pcaGoPromoter.Hs.hg19",
+                       "org.Mm.eg.db",
+                       "pcaGoPromoter.Mm.mm9",
+                       "RCy3",
+                       "ReactomePA"))
+```
+
+
+
+## Load packages:
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(clusterProfiler)
+library(combinat)
+library(ComplexHeatmap)
+library(dplyr)
+library(ggplot2) 
+library(graphics)
+library(grDevices)
+library(grid)
+library(igraph)
+library(knitr)
+library(pcaGoPromoter.Hs.hg19)
+library(pcaGoPromoter.Mm.mm9)
+library(pheatmap)
+library(purrr)
+library(RColorBrewer)
+library(stringi)
+library(tidyr)
+library(tidyverse)
+library(utils)
+library(ggnetwork)        
+library(intergraph)      
+library(MCDA)
+```
+
+
+
+# Data import
+
+```{r}
+mart <- biomaRt::useMart("ensembl")
+mart <- biomaRt::listDatasets(mart) 
+human <- biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+mouse <- biomaRt::useMart("ensembl", dataset = "mmusculus_gene_ensembl") 
+
+count_table <- count_file_name
+
+universe_Entrez <- clusterProfiler:: bitr(row.names(count_table), 
+                                         fromType="SYMBOL", 
+                                         toType="ENTREZID", 
+                                         OrgDb="org.Hs.eg.db", 
+                                         drop = T)
+
+
+info_dataset <- info_dataset_name
+
+
+TF_list <- read.delim(paste0(working_directory, "reference_files/", TF_list_name),
+                      header=TRUE,
+                      check.names=F)
+
+gmtfile_hallmarks <- clusterProfiler::read.gmt(paste0(working_directory, "reference_files/", gmtfile_name_hallmarks))
+gmtfile_go <- clusterProfiler::read.gmt(paste0(working_directory, "reference_files/", gmtfile_name_go))
+gmtfile_kegg <- clusterProfiler::read.gmt(paste0(working_directory, "reference_files/", gmtfile_name_kegg))
+gmtfile_reactome <- clusterProfiler::read.gmt(paste0(working_directory, "reference_files/", gmtfile_name_reactome))
+```
+
+
+
+# Analysis
+
+## Data filtering based on variability
+
+Filtering data based on the intra-gene variance, will select first `r topvar_genes` genes based on their variance.
+
+```{r}
+ds = count_table[order(apply(count_table,1,var), decreasing=T),]
+dd2 <- head(ds,topvar_genes)
+dd2 = t(dd2)
+```
+
+
+## Correlation and correlation cut-off calculation
+
+The first script *correlation_actions.R* calculates the **correlation_df** containing the information about the correlation of each gene to all other genes with respective p-value and r-value. Moreover, the script corrects for multiple testing, and filters the correlation_df for pval < 0.05 and r values > 0 resulting in **correlation_df_filt**. Additionally, the script calculates the cut-off values to be tested (**range_cutoff**).  
+
+The second script *obtain_cutoff_stats.R* contains the function **cutoff_prep** for obtaining stats for each cutoff, namely R?, the number of edges (no_edges), the number of nodes (no_nodes), as well as the number of networks (no_of_networks) the resulting igraph object would have.   
+In addition, all degree distribution plots are saved in pdf format in a newly generated directory (if print_distribution_plots = T in *Preparations*). 
+
+The third script *optimal_cutoff.R* calculates the optimal cut-off.
+
+```{r}
+source(paste0(working_directory,"scripts/", "correlation_actions.R"))
+
+source(paste0(working_directory,"scripts/", "obtain_cutoff_stats.R"))
+
+cutoff_stats = do.call("rbind", lapply(X = range_cutoff,
+                                       FUN = cutoff_prep,
+                                       corrdf_r = correlation_df_filt,
+                                       print.all.plots = print_distribution_plots))
+
+source(paste0(working_directory,"scripts/", "optimal_cutoff.R"))
+```
+
+
+Execute the following chunk to see the table containing all calculated cut-offs as well as to see the degree distribution plot for the calculated optimal cut-off.
+
+```{r, results='asis'}
+kable(cutoff_stats_concise, caption = "Correlation cut-off stats")
+plot(dd_plot_calculated_optimal)
+
+```
+
+
+## Data filtering based on correlation cut off
+
+**Set the optimal_cutoff your want to use for the further analysis.**  
+A new directory for the chosen optimal_cutoff is generated in which all further results will be saved.   
+The degree distribution plot for the chosen correlation cut-off is plotted and saved in the generated directory. In addition the count data is filtered (**filt_cutoff_counts**) to maintain only genes with at least one correlation to another gene above the chosen correlation cut-off. These genes are represented within a heatmap of the filtered count data.
+
+
+```{r}
+
+optimal_cutoff = calculated_optimal_cutoff
+#optimal_cutoff = 0.777 
+
+
+cutoff_wd <- paste0("dir_",optimal_cutoff, "_", topvar_genes)
+if(!cutoff_wd %in% list.dirs(working_directory)) {
+dir.create(paste0(working_directory,cutoff_wd))}
+
+stats_optimal_cutoff <- cutoff_stats[cutoff_stats$cutoff == optimal_cutoff, c("degree", "Probs")]
+dd_plot_optimal = ggplot(stats_optimal_cutoff,aes(x=log(degree), y= log(Probs))) +
+  geom_point() +
+  geom_smooth(method="lm") +
+  theme_bw() + 
+  ggtitle(paste0("Chosen correlation cut-off [",optimal_cutoff, "]"))
+print(dd_plot_optimal)
+ggsave(filename = paste0("Degree_distribution_plot_", optimal_cutoff, ".pdf"), plot = dd_plot_optimal, 
+       device = cairo_pdf, path = paste0(working_directory,cutoff_wd))
+
+
+filt_cutoff_data = correlation_df_filt %>% dplyr::filter(rval > optimal_cutoff)
+filt_cutoff_graph = igraph::graph_from_data_frame(filt_cutoff_data,directed=FALSE)
+filt_cutoff_counts = ds[row.names(ds) %in% names(V(filt_cutoff_graph)),]
+corresp_info = info_dataset[rownames(dd2)%in%rownames(info_dataset),]
+
+print(paste("After using the optimal cutoff of",optimal_cutoff, "the number of edges =", 
+            nrow(filt_cutoff_data), "and the number of nodes =", nrow(filt_cutoff_counts)))
+
+heatmap_filtered_counts <- pheatmap::pheatmap(mat = filt_cutoff_counts,
+                                              color=rev(RColorBrewer::brewer.pal(11, "RdBu")),
+                                              scale="row",
+                                              cluster_rows=T,
+                                              cluster_cols=T,
+                                              annotation_col=info_dataset[c(voi)],
+                                              fontsize = 8,
+                                              show_rownames = F, 
+                                              show_colnames = F)
+
+ggsave(filename = "Heatmap_topvar_genes.pdf", plot = heatmap_filtered_counts, device = cairo_pdf,
+       path = paste0(working_directory,cutoff_wd))
+
+
+```
+
+
+
+## GFC calculation 
+
+The group fold changes (GFCs) are calculated for each gene per condition. The defined variable of interest (voi) is used for the grouping of the samples.
+
+```{r}
+
+source(paste0(working_directory,"scripts/", "GFC_calculation.R" ))
+
+GFC_all_genes <- GFC_calculation(voi_id = voi)
+
+
+```
+
+
+
+## Clustering
+
+If cluster_algo = "auto"", five different cluster algorithms, namely cluster_label_prop, cluster_fast_greedy, cluster_louvain, cluster_infomap and cluster_walktrap are tested. Based on the highest modularity score, one of the algorithms is chosen for the actual clustering. Alternatively, one of the algorithms can be assigned to cluster_alog.  
+I addition, the number of iterations can be specified (e.g. 100). If a gene is assigned to more clusters than specified in max_cluster_count_per_gene, it is painted white in the network, representing no definite cluster assignment. 
+
+
+```{r}
+
+source(paste0(working_directory,"scripts/", "cluster_calculation.R" ))
+
+
+cluster_information <- cluster_calculation(igraph = filt_cutoff_graph,
+                                           cluster_algo = "auto",
+                                           no_of_iterations = 10,
+                                           max_cluster_count_per_gene = 10,
+                                           min_cluster_size = min_nodes_number_for_cluster,
+                                           GFC = GFC_all_genes)
+
+source(paste0(working_directory,"scripts/", "heatmap_clusters.R" ))
+
+heatmap_cluster <- heatmap_clusters(data = cluster_information, cluster_cols = T)
+
+
+```
+
+
+
+## Network generation
+
+```{r}
+
+source(paste0(working_directory,"scripts/", "network_generation.R" ))
+
+return_network <- network_layout(igraph.object = filt_cutoff_graph,
+                                 use.layout = layout_algorithm,                        
+                                 min.nodes.number = min_nodes_number_for_network)   
+
+igraph_object <- return_network$graph_object
+layout_matrix <- return_network$layout
+
+node_attributes <- node_information(igraph.object = igraph_object,
+                                    data_df = cluster_information,
+                                    GFC_df = GFC_all_genes,
+                                    TF_df = TF_list,
+                                    hallmark_df = gmtfile_hallmarks,
+                                    go_df = gmtfile_go,
+                                    kegg_df = gmtfile_kegg,
+                                    reactome_df = gmtfile_reactome,
+                                    org = organism)
+
+
+network_object <- generate_network_object(graph_object = igraph_object,
+                                          use_layout = layout_matrix)
+
+```
+
+
+
+## Network visualization 
+
+To visualize the **network colored by clusters**, execute the following chunk. The network will also be saved in pdf format, unless you set *save.pdf = F*.
+
+```{r}
+source(paste0(working_directory,"scripts/", "network_visualization.R" ))
+
+network_cluster <- visualize_network(network = network_object,
+                                     color.by = "cluster",
+                                     select.cluster = NULL,
+                                     plot.subnetwork = NULL,
+                                     gene.label = NULL,
+                                     use.layout = layout_algorithm,
+                                     save.pdf=T)
+print(network_cluster)
+```
+
+
+To visualize the **network colored by clusters**, execute the following chunk. The network will also be saved in pdf format, unless you set *save.single.pdf = F*.
+
+```{r}
+source(paste0(working_directory,"scripts/", "network_visualization.R" ))
+
+network_GFC <- GFC_colored_network(network = network_object,
+                                   select.cluster = NULL,
+                                   plot.subnetwork = NULL,
+                                   gene.label = NULL,
+                                   use.layout = layout_algorithm,
+                                   save.pdf = F,
+                                   save.single.pdf = T)
+
+gridExtra::marrangeGrob(grobs = network_GFC, ncol = 1, nrow = 1)
+```
+
+
+
+## Cluster Profiler 
+
+The *clusterprofiler_autoCena* function calculates the GSEA for all clusters included in the network. The results are saved within the new sub-directory "clusterProfiler" within the cutoff_wd. 
+
+```{r}
+source(paste0(working_directory,"scripts/","clusterprofiler_autoCena.R" ))
+
+
+clust_prof= clusterprofiler_autoCena(cluster_data = cluster_information,
+                                     cutoff_wd = cutoff_wd,
+                                     originalwd = working_directory,
+                                     chosen_cutoff = optimal_cutoff,
+                                     group = voi)
+
+
+```
+
+
+------------------------------------------------------------------------------------------------------------------
+
+# Further network adaptions and visualizations
+
+## Network object 
+
+If you like, you can apply the **prefuse force-directed layout** from cytoscape to the network by defining *layout_pers = "cytoscape"*. Make sure, that cytoscape is open and that **RCy3 Version 2.6.2** or newer is installed [link](https://bioconductor.org/packages/release/bioc/html/RCy3.html).
+Additionally, you can calculate the network based **only on specified clusters**. E.g. if you want to calculate the network only for the gold cluster, set *subnetwork_pers = "gold"*.   
+
+```{r}
+layout_pers = "cytoscape"
+subnetwork_pers = NULL
+```
+
+```{r}
+source(paste0(working_directory,"scripts/", "network_generation.R" ))
+
+ig_object = igraph::graph_from_data_frame(filt_cutoff_data, directed=FALSE)
+
+return_network_pers <- network_layout(igraph.object = ig_object,
+                                      use.layout = layout_pers,         
+                                      select.subnetwork = subnetwork_pers,           
+                                      min.nodes.number = min_nodes_number_for_cluster)  
+
+igraph_object_pers <- return_network_pers$graph_object
+layout_matrix_pers <- return_network_pers$layout  
+
+network_object_pers <- generate_network_object(graph_object = igraph_object_pers,
+                                                 use_layout = layout_matrix_pers)
+
+
+```
+
+
+**Only execute if you do not want to generate a new network object**
+If you don't want to apply a new layout, just save the existing network object as network_object_pers to ensure that the script runs smoothly. 
+
+```{r}
+network_object_pers <- network_object
+```
+
+
+
+## Network visualization 
+
+Options for visualize_network:   
+
++ **color.by**:         "basic", "cluster", "TF", "HALLMARK_X", "GO_X", "KEGG_X", "REACTOME_X", "GFC_X"  
++ **select.cluster**:   Only available for color.by = "cluster" -> colors only the selected cluster  
++ **gene.label**:       Provide vector of gene symbols  
++ **plot.subnetwork**:  Select subnetwork (e.g. "gold") to be plotted or NULL to show the whole network  
++ **use.layout**:       Provide same layout name as above, only used to name pdf file accordingly  
++ **save.pdf**:         T to plot network in pdf (for visualize_network function)
++ **save.single.pdf**:  T to plot all GFC networks in one pdf (for GFC_colored_network function only)
+
+
+For all *color.by* options, except if you want to visualize all GFC networks, use the following chunk:
+```{r}
+source(paste0(working_directory,"scripts/", "network_visualization.R" ))
+
+
+network_cluster <- visualize_network(network = network_object_pers,
+                                     color.by = "cluster",
+                                     select.cluster = NULL,
+                                     plot.subnetwork = NULL,
+                                     gene.label = NULL,
+                                     use.layout = layout_pers,
+                                     save.pdf=F)
+print(network_cluster)
+
+
+network_cluster <- visualize_network(network = network_object_pers,
+                                     color.by = "TF",
+                                     select.cluster = NULL,
+                                     plot.subnetwork = NULL,
+                                     gene.label = NULL,
+                                     use.layout = layout_pers,
+                                     save.pdf=F)
+print(network_cluster)
+
+network_cluster <- visualize_network(network = network_object_pers,
+                                     color.by = "GO_NEUTROPHIL",
+                                     select.cluster = NULL,
+                                     plot.subnetwork = NULL,
+                                     gene.label = NULL,
+                                     use.layout = layout_pers,
+                                     save.pdf=F)
+print(network_cluster)
+
+```
+
+
+If you want to plot the GFC networks for all conditions, use the following chunk:
+```{r}
+source(paste0(working_directory,"scripts/", "network_visualization.R" ))
+
+network_GFC_pers <- GFC_colored_network(network = network_object_pers,
+                                        gene.label = NULL,
+                                        plot.subnetwork = NULL,
+                                        use.layout = layout_pers,
+                                        save.pdf = F, 
+                                        save.single.pdf = F) 
+
+gridExtra::marrangeGrob(grobs = network_GFC_pers, ncol = 1, nrow = 1)
+  
+```
+
+
+## Cocena2 re-grouping
+
+Cocena can be used, to perform a clustering based on the defined modules. Either height or k-means clustering can be used to define the new number of clusters. This new clustering can be used again as input for Cocena2.
+
+```{r message=FALSE, warning=FALSE}
+source(paste0(working_directory,"scripts/", "clusters_samples_by_modules.R" ))
+
+voi_id="ID"
+
+GFC_all_genes_ID <- GFC_calculation(voi_id=voi_id)
+
+cluster_information_ID <- cluster_calculation(igraph = filt_cutoff_graph,
+                                           cluster_algo = "auto",
+                                           no_of_iterations = 10,
+                                           max_cluster_count_per_gene = 10,
+                                           min_cluster_size = min_nodes_number_for_cluster,
+                                           GFC = GFC_all_genes_ID)
+
+heatmap_cluster <- heatmap_clusters(data = cluster_information_ID, cluster_cols = T)
+
+
+
+cluster_table <- heatmap_clusters_table(data = cluster_information_ID)
+
+investigate_cluster(cluster_table)
+
+#select height oder k for k-means
+height = 4.2
+k = 6
+
+{plot(hclust(dist(cluster_table)), hang = -1, cex = 0.6); height = height; abline(h=height,col="red")}
+
+heatmap_clusters_set_height(heatmap_data = cluster_table, height = height)
+
+heatmap_clusters_set_k(heatmap_data = cluster_table, k = k)
+
+
+
+
+#Alluvial plot; select 3 columns from you annotation table to visualize them as an alluvial plot
+
+heatmap_insert_new_clustering(heatmap_data = cluster_table, height = height, compare_column_left = "status", middle = "Intubated", compare_column_right = "new_cluster", voi_id=voi_id,  color = "new_cluster")
+
+
+```
+
+
